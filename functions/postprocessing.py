@@ -1,0 +1,104 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import numpy as np
+from .lattice_tools import get_sum_relative_positions
+from .hamiltonian import build_hamiltonian, diagonalize_hamiltonian
+from .occupations import get_occupations
+    
+def calculate_electronic_free_energy(eigenvalues, chemical_potential , cutoff_energy):
+    mu = chemical_potential
+    W = cutoff_energy    
+    if np.any(eigenvalues.imag == 0):
+        f = 1/2 * np.sum( eigenvalues.real * (1 - np.sign(eigenvalues.real)) )
+    else:
+        extrem_a = -W
+        extrem_b = mu 
+        # arctan2_correction = (mu < eigenvalues.real).astype(int) * np.pi * W
+        f = arctan_integrate(extrem_b, eigenvalues) #+ arctan2_correction
+        f -= arctan_integrate(extrem_a, eigenvalues)
+        f = np.sum(f)
+        f /= np.pi
+    f *= 2 # spin
+    return f
+
+def arctan_integrate(x, eigenvals):
+    F = ( x - eigenvals.real  ) * np.arctan2(-eigenvals.imag,x - eigenvals.real)
+    F += -eigenvals.imag /2 *np.log( ( x - eigenvals.real  )**2 + (eigenvals.imag)**2 )
+    return F
+
+def build_bar_yn(positions, parameters):
+    bar = np.ones(parameters['number_of_sites'])
+    bar[::2] *= -1
+    yn = np.zeros_like(bar)
+    phaselinks = positions_to_phaselinks(positions, parameters) 
+    yn[:] = (bar * phaselinks)
+    return yn
+
+
+def calculate_DOS( frecuencies,  eigvals ):
+    rho = np.zeros_like(frecuencies, dtype='complex')
+    for idx,w in enumerate(frecuencies):
+        rho[idx] = np.sum(  1 / (w - eigvals)  )
+    rho = -1/np.pi * rho.imag
+    return rho
+
+
+def calculate_static_electronic_energy(positions, parameters, time = 0):
+    hamiltonian = build_hamiltonian(time, positions, parameters)
+    state_energies, state_vectors = diagonalize_hamiltonian(hamiltonian, parameters)
+    occupations = get_occupations(state_energies, parameters)
+    electronic_energy = 0
+    for idx in range(len(['spin_up','spin_down'])):
+        electronic_energy += np.sum(occupations[:,idx] * state_energies)
+    return electronic_energy
+
+def calculate_static_lattice_energy(positions, parameters):
+    # (only harmonic oscillation is implemented)
+    oscillator_params = parameters["oscillator_parameters"]
+    is_periodic = parameters["periodic_boundaries"]
+    if len(oscillator_params) > 1: raise NotImplementedError()
+    K = oscillator_params[0] # harmonic constant
+    lattice_energy = K/2 * np.sum( positions_to_phaselinks(positions, parameters)**2 )
+    if not is_periodic:
+        if "open_boundary_stretching" in parameters.keys():
+            G = parameters["open_boundary_stretching"]
+            a = parameters["lattice_parameter"]
+            N = parameters["number_of_sites"]
+            lattice_energy += -G * sum(positions_to_phaselinks(positions, parameters))
+    return lattice_energy
+
+def calculate_static_total_energy(positions, parameters):
+    electronic_energy = calculate_static_electronic_energy(positions, parameters)
+    lattice_energy = calculate_static_lattice_energy(positions, parameters)
+    return electronic_energy + lattice_energy
+
+def positions_to_phaselinks(positions, parameters):
+    a = parameters["lattice_parameter"]
+    n_sites = parameters["number_of_sites"]
+    is_periodic = parameters["periodic_boundaries"]
+    # y_n = u_{n+1} - u_{n} = Δr_{n+1} - Δr_{n}
+    # y_n = r_{n+1} - r_{n} - a
+    r_n = positions
+    y_n = np.roll(r_n, -1) - r_n - a
+    if is_periodic: y_n[-1] += n_sites * a # u_{N+1} = u_{n}
+    else: y_n = y_n[:-1]
+    # Return phaselinks
+    phaselinks = y_n
+    return phaselinks
+
+def calculate_electronic_density(states, parameters):
+    rho = np.sum( np.conj(states[:,0:parameters['number_electrons_up']]) * states[:,0:parameters['number_electrons_up']], axis=1 )
+    rho += np.sum( np.conj(states[:,0:parameters['number_electrons_down']]) * states[:,0:parameters['number_electrons_down']], axis=1 )
+    rho = rho.real - 1
+    return rho
+
+def calculate_bar_electronic_density(states, parameters):
+    rho = calculate_electronic_density(states, parameters)
+    bar_rho = 1/4 * ( 2*rho + np.roll(rho,-1) + np.roll(rho,-1) )
+    return bar_rho
+
+###############################################################
+#       Leandro Manuel Arancibia & Andrés Ignacio Bertoni     #
+# (leandro.arancibia9@gmail.com)   (andresibertoni@gmail.com) #
+###############################################################
